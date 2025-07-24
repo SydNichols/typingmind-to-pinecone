@@ -2,12 +2,21 @@
 const express = require('express');
 const axios = require('axios');
 const bodyParser = require('body-parser');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3010;
 
 app.use(bodyParser.json());
+
+// Serve static files from the static directory
+app.use('/static', express.static(path.join(__dirname, 'static')));
+
+// Serve the main HTML file at root
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'pages', 'index.html'));
+});
 
 // Proxy endpoint for Pinecone queries
 app.post('/pinecone-query', async (req, res) => {
