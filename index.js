@@ -230,6 +230,10 @@ app.post('/pinecone-query', async (req, res) => {
                     inputs: { text: query },
                     top_k: Math.min(top_k, 10000)
                 };
+                // Add filters inside the query object for text search
+                if (filters && Object.keys(filters).length > 0) {
+                    requestPayload.query.filter = filters;
+                }
                 break;
 
             case "vector":
@@ -243,6 +247,10 @@ app.post('/pinecone-query', async (req, res) => {
                     vector: { values: query },
                     top_k: Math.min(top_k, 10000)
                 };
+                // Add filters inside the query object for vector search
+                if (filters && Object.keys(filters).length > 0) {
+                    requestPayload.query.filter = filters;
+                }
                 break;
 
             case "id":
@@ -256,6 +264,10 @@ app.post('/pinecone-query', async (req, res) => {
                     id: query,
                     top_k: Math.min(top_k, 10000)
                 };
+                // Add filters inside the query object for ID search
+                if (filters && Object.keys(filters).length > 0) {
+                    requestPayload.query.filter = filters;
+                }
                 break;
 
             default:
@@ -268,11 +280,6 @@ app.post('/pinecone-query', async (req, res) => {
         // Add fields if specified
         if (fields && fields.length > 0) {
             requestPayload.fields = fields;
-        }
-
-        // Add filters if specified
-        if (filters && Object.keys(filters).length > 0) {
-            requestPayload.filter = filters;
         }
 
         // Add reranking if specified
@@ -393,7 +400,8 @@ app.get('/pinecone-examples', (req, res) => {
                         category: { "$eq": "technology" },
                         year: { "$gte": 2020 }
                     }
-                }
+                },
+                note: "Filters are automatically placed inside the query object"
             },
             vector_search: {
                 method: "POST",
