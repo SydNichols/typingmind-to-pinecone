@@ -3,11 +3,32 @@
   <head>
     <title>Hello Express!</title>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width" />
-    <link rel="stylesheet" href="./style.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Try multiple CSS path strategies for Render compatibility -->
+    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="stylesheet" href="/style.css" />
+    <style>
+      /* Fallback styles in case external CSS fails to load */
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 1rem;
+        font-family: system-ui, sans-serif;
+        color: black;
+        background-color: white;
+      }
+      h1 {
+        font-weight: 800;
+        font-size: 1.5rem;
+        color: #333;
+      }
+    </style>
   </head>
   <body>
     <h1>Hello Express!</h1>
     <p>Showing <code>pages/index.html</code></p>
+    <p><small>Server running on Render</small></p>
   </body>
 </html>
