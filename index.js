@@ -1,10 +1,13 @@
-// index.js - Corrected Pinecone API Implementation
+// index.js - Production-Ready Pinecone API Implementation
 const express = require('express');
 const axios = require('axios');
 const bodyParser = require('body-parser');
 const path = require('path');
-require('dotenv').config();
 
+// Only load dotenv in development
+if (process.env.NODE_ENV !== 'production') {
+    require('dotenv').config();
+}
 
 const app = express();
 const port = process.env.PORT || 3010;
@@ -21,25 +24,43 @@ function log(level, message, data = null) {
     } else {
         console.log(logEntry);
     }
+    
+    // Also output to stderr for better visibility on cloud platforms
+    if (level === 'error') {
+        console.error(logEntry, data ? JSON.stringify(data, null, 2) : '');
+    }
 }
 
-// Request logging
+// Environment variable debugging on startup
+log('info', 'Starting server initialization');
+log('info', 'Environment check', {
+    NODE_ENV: process.env.NODE_ENV,
+    PORT: process.env.PORT,
+    PINECONE_API_KEY: process.env.PINECONE_API_KEY ? `[SET - ${process.env.PINECONE_API_KEY.length} chars]` : '[NOT SET]',
+    PINECONE_INDEX_HOST: process.env.PINECONE_INDEX_HOST ? `[SET - ${process.env.PINECONE_INDEX_HOST}]` : '[NOT SET]'
+});
+
+// Request logging middleware
 app.use((req, res, next) => {
     log('info', `${req.method} ${req.url}`);
     next();
 });
 
 // Serve static files
-app.use('/static', express.static(path.join(__dirname, 'static')));
+app.use('/static', express.static(path.join(__dirname, 'static'), {
+    maxAge: '1d',
+    etag: true
+}));
 app.use(express.static(path.join(__dirname, 'static')));
 
 // Root route
 app.get('/', (req, res) => {
     const htmlPath = path.join(__dirname, 'pages', 'index.html');
+    log('info', 'Serving HTML from:', htmlPath);
     res.sendFile(htmlPath);
 });
 
-// Health check
+// Health check endpoint
 app.get('/health', (req, res) => {
     const pineconeApiKey = process.env.PINECONE_API_KEY;
     const pineconeIndexHost = process.env.PINECONE_INDEX_HOST;
@@ -49,22 +70,62 @@ app.get('/health', (req, res) => {
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || 'development',
         port: port,
+        platform: process.platform,
+        nodeVersion: process.version,
         pineconeConfig: {
             apiKey: {
                 isSet: !!pineconeApiKey,
-                length: pineconeApiKey ? pineconeApiKey.length : 0
+                length: pineconeApiKey ? pineconeApiKey.length : 0,
+                preview: pineconeApiKey ? pineconeApiKey.substring(0, 8) + '...' : null
             },
             indexHost: {
                 isSet: !!pineconeIndexHost,
                 value: pineconeIndexHost || null
             }
-        }
+        },
+        allEnvKeys: Object.keys(process.env).sort()
     };
     
+    log('info', 'Health check requested', healthData);
     res.json(healthData);
 });
 
-// Corrected Pinecone query endpoint
+// Environment variables debug endpoint (helpful for production debugging)
+app.get('/env-check', (req, res) => {
+    const envInfo = {
+        timestamp: new Date().toISOString(),
+        nodeEnv: process.env.NODE_ENV,
+        platform: process.platform,
+        nodeVersion: process.version,
+        environmentVariables: {
+            total: Object.keys(process.env).length,
+            pineconeVars: {}
+        }
+    };
+
+    // Check all environment variables that contain 'PINECONE'
+    Object.keys(process.env).forEach(key => {
+        if (key.toUpperCase().includes('PINECONE')) {
+            const value = process.env[key];
+            envInfo.environmentVariables.pineconeVars[key] = {
+                isSet: !!value,
+                length: value ? value.length : 0,
+                preview: value ? value.substring(0, 10) + '...' : null
+            };
+        }
+    });
+
+    // Also check common variations
+    const commonKeys = ['API_KEY', 'INDEX_HOST', 'HOST', 'KEY'];
+    envInfo.environmentVariables.allKeys = Object.keys(process.env)
+        .filter(key => commonKeys.some(common => key.includes(common)))
+        .sort();
+
+    log('info', 'Environment check requested', envInfo);
+    res.json(envInfo);
+});
+
+// Enhanced Pinecone query endpoint with robust environment variable handling
 app.post('/pinecone-query', async (req, res) => {
     log('info', 'Pinecone query started', { body: req.body });
     
@@ -79,17 +140,67 @@ app.post('/pinecone-query', async (req, res) => {
             search_type = "text"
         } = req.body;
 
-        // Get environment variables
-        const pineconeApiKey = process.env.PINECONE_API_KEY;
-        const pineconeIndexHost = process.env.PINECONE_INDEX_HOST;
+        // Multiple ways to get environment variables (in case of different naming)
+        let pineconeApiKey = process.env.PINECONE_API_KEY || 
+                           process.env.PINECONE_KEY || 
+                           process.env.API_KEY;
+        
+        let pineconeIndexHost = process.env.PINECONE_INDEX_HOST || 
+                              process.env.PINECONE_HOST || 
+                              process.env.INDEX_HOST;
+
+        // Clean up the host if it has https://
+        if (pineconeIndexHost && pineconeIndexHost.startsWith('https://')) {
+            pineconeIndexHost = pineconeIndexHost.replace('https://', '');
+        }
+
+        log('info', 'Environment variables check', {
+            apiKeyFound: !!pineconeApiKey,
+            apiKeyLength: pineconeApiKey ? pineconeApiKey.length : 0,
+            apiKeySource: pineconeApiKey ? (
+                process.env.PINECONE_API_KEY ? 'PINECONE_API_KEY' :
+                process.env.PINECONE_KEY ? 'PINECONE_KEY' :
+                process.env.API_KEY ? 'API_KEY' : 'unknown'
+            ) : 'none',
+            hostFound: !!pineconeIndexHost,
+            hostValue: pineconeIndexHost,
+            hostSource: pineconeIndexHost ? (
+                process.env.PINECONE_INDEX_HOST ? 'PINECONE_INDEX_HOST' :
+                process.env.PINECONE_HOST ? 'PINECONE_HOST' :
+                process.env.INDEX_HOST ? 'INDEX_HOST' : 'unknown'
+            ) : 'none'
+        });
 
         if (!pineconeApiKey || !pineconeIndexHost) {
-            log('error', 'Missing Pinecone configuration');
+            log('error', 'Missing Pinecone configuration', {
+                apiKeyFound: !!pineconeApiKey,
+                hostFound: !!pineconeIndexHost,
+                availableEnvVars: Object.keys(process.env).filter(k => 
+                    k.toUpperCase().includes('PINECONE') || 
+                    k.toUpperCase().includes('API') || 
+                    k.toUpperCase().includes('HOST')
+                )
+            });
+            
             return res.status(500).json({ 
                 error: 'Pinecone configuration missing. Please set PINECONE_API_KEY and PINECONE_INDEX_HOST environment variables.',
                 details: {
                     hasApiKey: !!pineconeApiKey,
-                    hasIndexHost: !!pineconeIndexHost
+                    hasIndexHost: !!pineconeIndexHost,
+                    checkedVariables: [
+                        'PINECONE_API_KEY',
+                        'PINECONE_KEY', 
+                        'API_KEY',
+                        'PINECONE_INDEX_HOST',
+                        'PINECONE_HOST',
+                        'INDEX_HOST'
+                    ],
+                    availableEnvVars: Object.keys(process.env).filter(k => 
+                        k.toUpperCase().includes('PINECONE') || 
+                        k.toUpperCase().includes('API') || 
+                        k.toUpperCase().includes('HOST')
+                    ),
+                    help: 'Make sure to set environment variables in your Render dashboard'
                 }
             });
         }
@@ -109,10 +220,10 @@ app.post('/pinecone-query', async (req, res) => {
         // Configure query based on search type
         switch (search_type) {
             case "text":
-                // Text search with integrated embedding
                 if (typeof query !== 'string') {
                     return res.status(400).json({ 
-                        error: 'For text search, query must be a string'
+                        error: 'For text search, query must be a string',
+                        example: { query: "find documents about machine learning" }
                     });
                 }
                 requestPayload.query = {
@@ -122,10 +233,10 @@ app.post('/pinecone-query', async (req, res) => {
                 break;
 
             case "vector":
-                // Vector search
                 if (!Array.isArray(query) || query.some(v => typeof v !== 'number')) {
                     return res.status(400).json({ 
-                        error: 'For vector search, query must be an array of numbers'
+                        error: 'For vector search, query must be an array of numbers',
+                        example: { query: [0.1, 0.2, 0.3, 0.4] }
                     });
                 }
                 requestPayload.query = {
@@ -135,10 +246,10 @@ app.post('/pinecone-query', async (req, res) => {
                 break;
 
             case "id":
-                // ID-based search
                 if (typeof query !== 'string') {
                     return res.status(400).json({ 
-                        error: 'For ID search, query must be a record ID string'
+                        error: 'For ID search, query must be a record ID string',
+                        example: { query: "record_123" }
                     });
                 }
                 requestPayload.query = {
@@ -172,7 +283,6 @@ app.post('/pinecone-query', async (req, res) => {
                 rank_fields: rerank.rank_fields || fields
             };
 
-            // Add query for reranking if it's vector or ID search
             if (search_type !== "text" && rerank.query) {
                 requestPayload.rerank.query = rerank.query;
             }
@@ -285,22 +395,6 @@ app.get('/pinecone-examples', (req, res) => {
                     }
                 }
             },
-            text_search_with_rerank: {
-                method: "POST",
-                url: "/pinecone-query",
-                body: {
-                    query: "deep learning neural networks",
-                    search_type: "text",
-                    namespace: "documents",
-                    top_k: 20,
-                    fields: ["title", "content", "abstract"],
-                    rerank: {
-                        model: "bge-reranker-v2-m3",
-                        top_n: 5,
-                        rank_fields: ["content", "abstract"]
-                    }
-                }
-            },
             vector_search: {
                 method: "POST",
                 url: "/pinecone-query",
@@ -313,38 +407,19 @@ app.get('/pinecone-examples', (req, res) => {
                 }
             }
         },
-        notes: [
-            "Text search requires an index with integrated embedding",
-            "Vector search works with any index but requires pre-computed embeddings",
-            "Filters use MongoDB-style syntax: $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin",
-            "Reranking helps improve relevance of initial results"
-        ]
+        environment_setup: {
+            required_variables: [
+                "PINECONE_API_KEY - Your Pinecone API key",
+                "PINECONE_INDEX_HOST - Your index host (without https://)"
+            ],
+            render_setup: [
+                "1. Go to Render Dashboard → Your Service → Environment",
+                "2. Add PINECONE_API_KEY with your API key",
+                "3. Add PINECONE_INDEX_HOST with your index host",
+                "4. Redeploy the service"
+            ]
+        }
     });
-});
-
-// Test endpoint for quick testing
-app.post('/test-pinecone', async (req, res) => {
-    const testQuery = {
-        query: "test search query",
-        search_type: "text",
-        namespace: "__default__",
-        top_k: 3
-    };
-    
-    log('info', 'Test Pinecone endpoint called', testQuery);
-    
-    // Forward to the main pinecone-query endpoint
-    try {
-        const result = await axios.post(`${req.protocol}://${req.get('host')}/pinecone-query`, testQuery, {
-            headers: { 'Content-Type': 'application/json' }
-        });
-        res.json(result.data);
-    } catch (error) {
-        res.status(500).json({
-            error: 'Test failed',
-            details: error.response?.data || error.message
-        });
-    }
 });
 
 // 404 handler
@@ -355,9 +430,9 @@ app.use((req, res) => {
         available_endpoints: [
             'GET /',
             'GET /health',
+            'GET /env-check',
             'GET /pinecone-examples', 
-            'POST /pinecone-query',
-            'POST /test-pinecone'
+            'POST /pinecone-query'
         ]
     });
 });
@@ -372,6 +447,8 @@ app.listen(port, '0.0.0.0', () => {
     log('info', 'Server started successfully', {
         port: port,
         environment: process.env.NODE_ENV || 'development',
+        platform: process.platform,
+        nodeVersion: process.version,
         pineconeConfigured: {
             hasApiKey: !!process.env.PINECONE_API_KEY,
             hasIndexHost: !!process.env.PINECONE_INDEX_HOST
@@ -383,7 +460,15 @@ app.listen(port, '0.0.0.0', () => {
     console.log('📚 Endpoints:');
     console.log('   GET  /                - Main page');
     console.log('   GET  /health          - Health check');
+    console.log('   GET  /env-check       - Environment variables check');
     console.log('   GET  /pinecone-examples - Usage examples');
     console.log('   POST /pinecone-query  - Semantic search');
-    console.log('   POST /test-pinecone   - Quick test');
+    
+    // Log environment status on startup
+    setTimeout(() => {
+        log('info', 'Startup complete - Environment status', {
+            PINECONE_API_KEY: process.env.PINECONE_API_KEY ? 'SET' : 'NOT SET',
+            PINECONE_INDEX_HOST: process.env.PINECONE_INDEX_HOST ? 'SET' : 'NOT SET'
+        });
+    }, 1000);
 });
