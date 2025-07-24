@@ -5,9 +5,6 @@ const bodyParser = require('body-parser');
 const path = require('path');
 require('dotenv').config();
 
-console.log('=== ENVIRONMENT VARIABLES DEBUG ===');
-console.log('NODE_ENV:', process.env.NODE_ENV);
-console.log('PORT:', process.env.PORT);
 
 const app = express();
 const port = process.env.PORT || 3010;
