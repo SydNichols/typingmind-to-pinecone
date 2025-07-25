@@ -298,7 +298,8 @@ app.post('/pinecone-query', async (req, res) => {
             headers: {
                 'Api-Key': pineconeApiKey,
                 'Content-Type': 'application/json',
-                'Accept': 'application/json'
+                'Accept': 'application/json', 
+                'X-Pinecone-API-Version': 'unstable'
             },
             timeout: 30000
         });
