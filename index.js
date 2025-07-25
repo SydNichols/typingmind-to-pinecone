@@ -46,6 +46,19 @@ app.use((req, res, next) => {
     next();
 });
 
+// CORS middleware for TypingMind plugin
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    
+    if (req.method === 'OPTIONS') {
+        res.sendStatus(200);
+    } else {
+        next();
+    }
+});
+
 // Serve static files
 app.use('/static', express.static(path.join(__dirname, 'static'), {
     maxAge: '1d',
@@ -140,6 +153,16 @@ app.post('/pinecone-query', async (req, res) => {
             search_type = "text"
         } = req.body;
 
+        // Enhanced request logging
+        log('info', 'Request parameters parsed', {
+            query: query,
+            namespace: namespace,
+            top_k: top_k,
+            fields: fields,
+            filters: filters,
+            search_type: search_type
+        });
+
         // Multiple ways to get environment variables (in case of different naming)
         let pineconeApiKey = process.env.PINECONE_API_KEY || 
                            process.env.PINECONE_KEY || 
@@ -211,8 +234,13 @@ app.post('/pinecone-query', async (req, res) => {
             });
         }
 
-        // Build the Pinecone API URL
+        // Build the Pinecone API URL - this is where namespace is used!
         const pineconeApiUrl = `https://${pineconeIndexHost}/records/namespaces/${encodeURIComponent(namespace)}/search`;
+        
+        log('info', 'Built Pinecone API URL', {
+            url: pineconeApiUrl,
+            namespace_used: namespace
+        });
 
         // Build request payload according to Pinecone API 2025-01 specification
         let requestPayload = {};
@@ -306,7 +334,8 @@ app.post('/pinecone-query', async (req, res) => {
 
         log('info', 'Pinecone response received', {
             status: response.status,
-            resultCount: response.data?.result?.hits?.length || 0
+            resultCount: response.data?.result?.hits?.length || 0,
+            namespace_searched: namespace
         });
 
         // Process and return the response
@@ -321,12 +350,14 @@ app.post('/pinecone-query', async (req, res) => {
                 top_k,
                 total_results: searchResults.result?.hits?.length || 0,
                 has_reranking: !!rerank,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                pinecone_url_used: pineconeApiUrl
             }
         };
 
         log('info', 'Pinecone search completed successfully', {
-            total_results: enhancedResults.metadata.total_results
+            total_results: enhancedResults.metadata.total_results,
+            namespace_searched: namespace
         });
         
         res.json(enhancedResults);
@@ -334,10 +365,17 @@ app.post('/pinecone-query', async (req, res) => {
     } catch (error) {
         log('error', 'Pinecone query error', {
             message: error.message,
+            stack: error.stack,
             response: error.response ? {
                 status: error.response.status,
                 statusText: error.response.statusText,
-                data: error.response.data
+                data: error.response.data,
+                headers: error.response.headers
+            } : null,
+            config: error.config ? {
+                url: error.config.url,
+                method: error.config.method,
+                headers: error.config.headers
             } : null
         });
         
@@ -346,7 +384,8 @@ app.post('/pinecone-query', async (req, res) => {
                 error: 'Pinecone API error',
                 details: error.response.data,
                 status: error.response.status,
-                statusText: error.response.statusText
+                statusText: error.response.statusText,
+                pinecone_url: error.config?.url || 'unknown'
             });
         }
         
@@ -354,6 +393,15 @@ app.post('/pinecone-query', async (req, res) => {
             return res.status(503).json({
                 error: 'Unable to connect to Pinecone API',
                 details: 'Please check your PINECONE_INDEX_HOST configuration',
+                code: error.code,
+                host_attempted: error.config?.url || 'unknown'
+            });
+        }
+
+        if (error.code === 'ECONNABORTED') {
+            return res.status(504).json({
+                error: 'Pinecone API timeout',
+                details: 'Request took longer than 30 seconds',
                 code: error.code
             });
         }
@@ -364,6 +412,62 @@ app.post('/pinecone-query', async (req, res) => {
             timestamp: new Date().toISOString()
         });
     }
+});
+
+// Test endpoint for debugging namespace issues
+app.get('/test-namespaces', async (req, res) => {
+    const pineconeApiKey = process.env.PINECONE_API_KEY;
+    const pineconeIndexHost = process.env.PINECONE_INDEX_HOST;
+    
+    if (!pineconeApiKey || !pineconeIndexHost) {
+        return res.status(500).json({
+            error: 'Pinecone not configured'
+        });
+    }
+
+    const testResults = {};
+    const namespaces = ['__default__', 'key_learnings', 'challenges', 'initiatives'];
+    
+    for (const namespace of namespaces) {
+        try {
+            const pineconeApiUrl = `https://${pineconeIndexHost}/records/namespaces/${encodeURIComponent(namespace)}/search`;
+            const testPayload = {
+                query: {
+                    inputs: { text: "test" },
+                    top_k: 1
+                }
+            };
+            
+            const response = await axios.post(pineconeApiUrl, testPayload, {
+                headers: {
+                    'Api-Key': pineconeApiKey,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json', 
+                    'X-Pinecone-API-Version': 'unstable'
+                },
+                timeout: 10000
+            });
+            
+            testResults[namespace] = {
+                status: 'success',
+                result_count: response.data?.result?.hits?.length || 0,
+                url: pineconeApiUrl
+            };
+        } catch (error) {
+            testResults[namespace] = {
+                status: 'error',
+                error: error.message,
+                response_status: error.response?.status,
+                response_data: error.response?.data,
+                url: `https://${pineconeIndexHost}/records/namespaces/${encodeURIComponent(namespace)}/search`
+            };
+        }
+    }
+    
+    res.json({
+        timestamp: new Date().toISOString(),
+        namespace_tests: testResults
+    });
 });
 
 // Example usage endpoint
@@ -433,6 +537,7 @@ app.use((req, res) => {
             'GET /',
             'GET /health',
             'GET /env-check',
+            'GET /test-namespaces',
             'GET /pinecone-examples', 
             'POST /pinecone-query'
         ]
@@ -463,6 +568,7 @@ app.listen(port, '0.0.0.0', () => {
     console.log('   GET  /                - Main page');
     console.log('   GET  /health          - Health check');
     console.log('   GET  /env-check       - Environment variables check');
+    console.log('   GET  /test-namespaces - Test all namespaces');
     console.log('   GET  /pinecone-examples - Usage examples');
     console.log('   POST /pinecone-query  - Semantic search');
     
