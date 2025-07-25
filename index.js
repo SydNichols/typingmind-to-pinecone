@@ -132,7 +132,7 @@ app.post('/pinecone-query', async (req, res) => {
     try {
         const {
             query,
-            namespace = "_default_",
+            namespace = "__default__",
             top_k = 10,
             fields = [],
             filters = {},
