@@ -923,7 +923,10 @@ app.use((req, res) => {
             'GET /env-check',
             'GET /test-namespaces',
             'GET /pinecone-examples', 
-            'POST /pinecone-query'
+            'POST /pinecone-query',
+            'GET /api/recent',        // NEW
+            'POST /api/search',       // NEW
+            'POST /api/chat'          // NEW
         ]
     });
 });
