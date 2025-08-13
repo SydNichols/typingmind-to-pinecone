@@ -1,6 +1,8 @@
 // FLINT OS Knowledge Base Server - Complete Fixed Version
 // Version: 1.1.1-pinecone2025-fix
 // Date: August 13, 2025
+import { Pinecone } from '@pinecone-database/pinecone'
+
 
 const express = require('express');
 const axios = require('axios');
@@ -157,6 +159,56 @@ app.get('/health', (req, res) => {
     
     res.json(healthData);
 });
+
+app.get('/recent-notion', async(req, res) => {
+    try {
+        //test Notion connection
+        const notionToken = 'ntn_v76360814545OsVy0XnVxzXFBJ82Lye9J8R9q8q1rel85F';
+        
+        if (!notionToken) {
+            return res.status(500).json({
+                error: 'Notion configuration missing',
+                missing: {
+                    token: !notionToken,
+                }
+            });
+        }
+
+        const notionPayload = {
+            sorts: [
+                {
+                    property: "Date Received",
+                    direction: "descending"
+                }
+            ],
+            page_size: 10
+        };
+
+        const response = await axios.post(`https://api.notion.com/v1/databases/22d1c7255b2e80d1a2c3f7b6586e26a4/query`, notionPayload, {
+            headers: {
+                'Authorization': `Bearer ${notionToken}`,
+                'Content-Type': 'application/json',
+                'Notion-Version': '2022-06-28'
+            },
+            timeout: 30000
+        });
+
+        res.json({
+            status: 'success',
+            id: response.result.id
+        });
+
+    } catch (error) {
+        log('error', 'Namespace test failed', error);
+        res.status(500).json({
+            error: 'Failed to test connection',
+            message: error.message,
+            status: error.response?.status,
+            data: error.response?.data
+        });
+    }
+})
+
 
 // Test namespaces endpoint (for debugging)
 app.get('/test-namespaces', async (req, res) => {
