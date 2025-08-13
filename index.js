@@ -1,4 +1,4 @@
-// index.js - Production-Ready Pinecone API Implementation
+// index.js - Production-Ready Pinecone API Implementation with FLINT OS Knowledge Base
 const express = require('express');
 const axios = require('axios');
 const bodyParser = require('body-parser');
@@ -31,6 +31,7 @@ function log(level, message, data = null) {
     }
 }
 
+// FLINT OS Helper Functions
 function formatDate(dateString) {
     if (!dateString) return "Unknown date";
 
@@ -38,7 +39,7 @@ function formatDate(dateString) {
         const date = new Date(dateString);
         const now = new Date();
         const diffMs = now - date;
-        const diffHours = Math.floor(diffMs / (1000 * 60 *60));
+        const diffHours = Math.floor(diffMs / (1000 * 60 * 60)); // FIXED: Added missing space
         const diffDays = Math.floor(diffHours / 24);
 
         if (diffHours < 1) return "Just now";
@@ -62,7 +63,7 @@ function deriveImportance(metadata) {
     return "low";
 }
 
-//Email validation
+// Email domain validation middleware
 const validateEmailDomain = (req, res, next) => {
     const email = req.headers['x-user-email'];
     const allowedDomain = process.env.ALLOWED_EMAIL_DOMAIN || '@yourcompany.com';
@@ -79,14 +80,18 @@ const validateEmailDomain = (req, res, next) => {
     next();
 };
 
-
 // Environment variable debugging on startup
 log('info', 'Starting server initialization');
 log('info', 'Environment check', {
     NODE_ENV: process.env.NODE_ENV,
     PORT: process.env.PORT,
     PINECONE_API_KEY: process.env.PINECONE_API_KEY ? `[SET - ${process.env.PINECONE_API_KEY.length} chars]` : '[NOT SET]',
-    PINECONE_INDEX_HOST: process.env.PINECONE_INDEX_HOST ? `[SET - ${process.env.PINECONE_INDEX_HOST}]` : '[NOT SET]'
+    PINECONE_INDEX_HOST: process.env.PINECONE_INDEX_HOST ? `[SET - ${process.env.PINECONE_INDEX_HOST}]` : '[NOT SET]',
+    // FLINT OS specific variables
+    FLINT_OS_PINECONE_API_KEY: process.env.FLINT_OS_PINECONE_API_KEY ? `[SET - ${process.env.FLINT_OS_PINECONE_API_KEY.length} chars]` : '[NOT SET]',
+    FLINT_OS_PINECONE_INDEX_HOST: process.env.FLINT_OS_PINECONE_INDEX_HOST ? `[SET - ${process.env.FLINT_OS_PINECONE_INDEX_HOST}]` : '[NOT SET]',
+    ALLOWED_EMAIL_DOMAIN: process.env.ALLOWED_EMAIL_DOMAIN || '[NOT SET]',
+    MAKE_CHAT_WEBHOOK_URL: process.env.MAKE_CHAT_WEBHOOK_URL ? '[SET]' : '[NOT SET]'
 });
 
 // Request logging middleware
@@ -99,7 +104,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-user-email');
     
     if (req.method === 'OPTIONS') {
         res.sendStatus(200);
@@ -122,10 +127,12 @@ app.get('/', (req, res) => {
     res.sendFile(htmlPath);
 });
 
-// Health check endpoint
+// Enhanced Health check endpoint
 app.get('/health', (req, res) => {
     const pineconeApiKey = process.env.PINECONE_API_KEY;
     const pineconeIndexHost = process.env.PINECONE_INDEX_HOST;
+    const flintOsApiKey = process.env.FLINT_OS_PINECONE_API_KEY;
+    const flintOsIndexHost = process.env.FLINT_OS_PINECONE_INDEX_HOST;
     
     const healthData = {
         status: 'OK',
@@ -135,14 +142,28 @@ app.get('/health', (req, res) => {
         platform: process.platform,
         nodeVersion: process.version,
         pineconeConfig: {
-            apiKey: {
-                isSet: !!pineconeApiKey,
-                length: pineconeApiKey ? pineconeApiKey.length : 0,
-                preview: pineconeApiKey ? pineconeApiKey.substring(0, 8) + '...' : null
+            transcripts: {
+                apiKey: {
+                    isSet: !!pineconeApiKey,
+                    length: pineconeApiKey ? pineconeApiKey.length : 0,
+                    preview: pineconeApiKey ? pineconeApiKey.substring(0, 8) + '...' : null
+                },
+                indexHost: {
+                    isSet: !!pineconeIndexHost,
+                    value: pineconeIndexHost || null
+                }
             },
-            indexHost: {
-                isSet: !!pineconeIndexHost,
-                value: pineconeIndexHost || null
+            flintOs: {
+                apiKey: {
+                    isSet: !!flintOsApiKey,
+                    length: flintOsApiKey ? flintOsApiKey.length : 0,
+                    preview: flintOsApiKey ? flintOsApiKey.substring(0, 8) + '...' : null
+                },
+                indexHost: {
+                    isSet: !!flintOsIndexHost,
+                    value: flintOsIndexHost || null
+                },
+                usingFallback: !flintOsApiKey || !flintOsIndexHost
             }
         },
         // FLINT OS KB additions
@@ -189,7 +210,7 @@ app.get('/env-check', (req, res) => {
     });
 
     // Also check common variations
-    const commonKeys = ['API_KEY', 'INDEX_HOST', 'HOST', 'KEY'];
+    const commonKeys = ['API_KEY', 'INDEX_HOST', 'HOST', 'KEY', 'CHAT', 'EMAIL'];
     envInfo.environmentVariables.allKeys = Object.keys(process.env)
         .filter(key => commonKeys.some(common => key.includes(common)))
         .sort();
@@ -198,7 +219,7 @@ app.get('/env-check', (req, res) => {
     res.json(envInfo);
 });
 
-// Enhanced Pinecone query endpoint with robust environment variable handling
+// Enhanced Pinecone query endpoint (for transcripts)
 app.post('/pinecone-query', async (req, res) => {
     log('info', 'Pinecone query started', { body: req.body });
     
@@ -474,7 +495,6 @@ app.post('/pinecone-query', async (req, res) => {
     }
 });
 
-
 // Test endpoint for debugging namespace issues
 app.get('/test-namespaces', async (req, res) => {
     const pineconeApiKey = process.env.PINECONE_API_KEY;
@@ -574,22 +594,54 @@ app.get('/pinecone-examples', (req, res) => {
                 }
             }
         },
+        flint_os_endpoints: {
+            recent_knowledge: {
+                method: "GET",
+                url: "/api/recent",
+                headers: { "x-user-email": "user@yourcompany.com" },
+                query_params: { "limit": 20, "days": 30 }
+            },
+            search_knowledge: {
+                method: "POST",
+                url: "/api/search",
+                headers: { "x-user-email": "user@yourcompany.com" },
+                body: {
+                    query: "project updates",
+                    filters: {
+                        source_type: ["meetings", "documents"],
+                        tags: ["important"]
+                    }
+                }
+            },
+            chat: {
+                method: "POST",
+                url: "/api/chat",
+                headers: { "x-user-email": "user@yourcompany.com" },
+                body: {
+                    message: "What were the key decisions made last week?",
+                    conversation_history: []
+                }
+            }
+        },
         environment_setup: {
             required_variables: [
-                "PINECONE_API_KEY - Your Pinecone API key",
-                "PINECONE_INDEX_HOST - Your index host (without https://)"
+                "PINECONE_API_KEY - Your Pinecone API key (for transcripts)",
+                "PINECONE_INDEX_HOST - Your index host (for transcripts)",
+                "FLINT_OS_PINECONE_API_KEY - FLINT OS API key (optional, falls back to main)",
+                "FLINT_OS_PINECONE_INDEX_HOST - FLINT OS index host (optional, falls back to main)",
+                "ALLOWED_EMAIL_DOMAIN - Email domain for authentication",
+                "MAKE_CHAT_WEBHOOK_URL - Make.com webhook for chat"
             ],
             render_setup: [
                 "1. Go to Render Dashboard → Your Service → Environment",
-                "2. Add PINECONE_API_KEY with your API key",
-                "3. Add PINECONE_INDEX_HOST with your index host",
-                "4. Redeploy the service"
+                "2. Add all required variables",
+                "3. Redeploy the service"
             ]
         }
     });
 });
 
-//recent knowledge endpoint
+// FLINT OS Recent Knowledge Endpoint
 app.get('/api/recent', validateEmailDomain, async (req, res) => {
     log('info', 'Recent knowledge request started');
     
@@ -600,14 +652,24 @@ app.get('/api/recent', validateEmailDomain, async (req, res) => {
         const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
         const dateFilter = cutoffDate.toISOString().split('T')[0]; // YYYY-MM-DD format
         
-        // Use your existing Pinecone configuration
-        let pineconeApiKey = process.env.PINECONE_API_KEY || 
+        // Use FLINT OS specific Pinecone configuration (separate from transcripts)
+        let pineconeApiKey = process.env.FLINT_OS_PINECONE_API_KEY || 
+                           process.env.PINECONE_API_KEY ||  // fallback to main key
                            process.env.PINECONE_KEY || 
                            process.env.API_KEY;
         
-        let pineconeIndexHost = process.env.PINECONE_INDEX_HOST || 
+        let pineconeIndexHost = process.env.FLINT_OS_PINECONE_INDEX_HOST || 
+                              process.env.PINECONE_INDEX_HOST ||  // fallback to main host
                               process.env.PINECONE_HOST || 
                               process.env.INDEX_HOST;
+
+        // Log which configuration we're using
+        log('info', 'FLINT OS Pinecone configuration', {
+            using_flint_os_key: !!process.env.FLINT_OS_PINECONE_API_KEY,
+            using_flint_os_host: !!process.env.FLINT_OS_PINECONE_INDEX_HOST,
+            api_key_source: process.env.FLINT_OS_PINECONE_API_KEY ? 'FLINT_OS_PINECONE_API_KEY' : 'fallback',
+            host_source: process.env.FLINT_OS_PINECONE_INDEX_HOST ? 'FLINT_OS_PINECONE_INDEX_HOST' : 'fallback'
+        });
 
         if (pineconeIndexHost && pineconeIndexHost.startsWith('https://')) {
             pineconeIndexHost = pineconeIndexHost.replace('https://', '');
@@ -616,7 +678,7 @@ app.get('/api/recent', validateEmailDomain, async (req, res) => {
         if (!pineconeApiKey || !pineconeIndexHost) {
             return res.status(500).json({ 
                 error: 'Pinecone configuration missing',
-                details: 'Please set PINECONE_API_KEY and PINECONE_INDEX_HOST'
+                details: 'Please set FLINT_OS_PINECONE_API_KEY and FLINT_OS_PINECONE_INDEX_HOST (or fallback variables)'
             });
         }
         
@@ -698,7 +760,7 @@ app.get('/api/recent', validateEmailDomain, async (req, res) => {
     }
 });
 
-//Search endpoint with filter translation
+// FLINT OS Search Endpoint with Filter Translation
 app.post('/api/search', validateEmailDomain, async (req, res) => {
     log('info', 'Knowledge search request started', {
         body: req.body,
@@ -715,14 +777,24 @@ app.post('/api/search', validateEmailDomain, async (req, res) => {
             });
         }
         
-        // Use your existing Pinecone configuration
-        let pineconeApiKey = process.env.PINECONE_API_KEY || 
+        // Use FLINT OS specific Pinecone configuration (separate from transcripts)
+        let pineconeApiKey = process.env.FLINT_OS_PINECONE_API_KEY || 
+                           process.env.PINECONE_API_KEY ||  // fallback to main key
                            process.env.PINECONE_KEY || 
                            process.env.API_KEY;
         
-        let pineconeIndexHost = process.env.PINECONE_INDEX_HOST || 
+        let pineconeIndexHost = process.env.FLINT_OS_PINECONE_INDEX_HOST || 
+                              process.env.PINECONE_INDEX_HOST ||  // fallback to main host
                               process.env.PINECONE_HOST || 
                               process.env.INDEX_HOST;
+
+        // Log which configuration we're using
+        log('info', 'FLINT OS Pinecone configuration', {
+            using_flint_os_key: !!process.env.FLINT_OS_PINECONE_API_KEY,
+            using_flint_os_host: !!process.env.FLINT_OS_PINECONE_INDEX_HOST,
+            api_key_source: process.env.FLINT_OS_PINECONE_API_KEY ? 'FLINT_OS_PINECONE_API_KEY' : 'fallback',
+            host_source: process.env.FLINT_OS_PINECONE_INDEX_HOST ? 'FLINT_OS_PINECONE_INDEX_HOST' : 'fallback'
+        });
 
         if (pineconeIndexHost && pineconeIndexHost.startsWith('https://')) {
             pineconeIndexHost = pineconeIndexHost.replace('https://', '');
@@ -731,7 +803,7 @@ app.post('/api/search', validateEmailDomain, async (req, res) => {
         if (!pineconeApiKey || !pineconeIndexHost) {
             return res.status(500).json({ 
                 error: 'Pinecone configuration missing',
-                details: 'Please set PINECONE_API_KEY and PINECONE_INDEX_HOST'
+                details: 'Please set FLINT_OS_PINECONE_API_KEY and FLINT_OS_PINECONE_INDEX_HOST (or fallback variables)'
             });
         }
         
@@ -826,7 +898,7 @@ app.post('/api/search', validateEmailDomain, async (req, res) => {
     }
 });
 
-//Chat webhook proxy
+// FLINT OS Chat Webhook Proxy
 app.post('/api/chat', validateEmailDomain, async (req, res) => {
     log('info', 'Chat request started', {
         message_preview: req.body.message?.substring(0, 100),
@@ -924,9 +996,9 @@ app.use((req, res) => {
             'GET /test-namespaces',
             'GET /pinecone-examples', 
             'POST /pinecone-query',
-            'GET /api/recent',        // NEW
-            'POST /api/search',       // NEW
-            'POST /api/chat'          // NEW
+            'GET /api/recent',        // FLINT OS
+            'POST /api/search',       // FLINT OS
+            'POST /api/chat'          // FLINT OS
         ]
     });
 });
@@ -944,12 +1016,14 @@ app.listen(port, '0.0.0.0', () => {
         platform: process.platform,
         nodeVersion: process.version,
         pineconeConfigured: {
-            hasApiKey: !!process.env.PINECONE_API_KEY,
-            hasIndexHost: !!process.env.PINECONE_INDEX_HOST
+            hasTranscriptsApiKey: !!process.env.PINECONE_API_KEY,
+            hasTranscriptsIndexHost: !!process.env.PINECONE_INDEX_HOST,
+            hasFlintOsApiKey: !!process.env.FLINT_OS_PINECONE_API_KEY,
+            hasFlintOsIndexHost: !!process.env.FLINT_OS_PINECONE_INDEX_HOST
         }
     });
     
-    console.log('\n🚀 Pinecone Semantic Search Server Running!');
+    console.log('\n🚀 FLINT OS Knowledge Base Server Running!');
     console.log(`📍 URL: http://localhost:${port}`);
     console.log('📚 Endpoints:');
     console.log('   GET  /                - Main page');
@@ -957,13 +1031,20 @@ app.listen(port, '0.0.0.0', () => {
     console.log('   GET  /env-check       - Environment variables check');
     console.log('   GET  /test-namespaces - Test all namespaces');
     console.log('   GET  /pinecone-examples - Usage examples');
-    console.log('   POST /pinecone-query  - Semantic search');
+    console.log('   POST /pinecone-query  - Semantic search (transcripts)');
+    console.log('   GET  /api/recent      - Recent FLINT OS knowledge');
+    console.log('   POST /api/search      - Search FLINT OS knowledge');
+    console.log('   POST /api/chat        - FLINT OS chat assistant');
     
     // Log environment status on startup
     setTimeout(() => {
         log('info', 'Startup complete - Environment status', {
-            PINECONE_API_KEY: process.env.PINECONE_API_KEY ? 'SET' : 'NOT SET',
-            PINECONE_INDEX_HOST: process.env.PINECONE_INDEX_HOST ? 'SET' : 'NOT SET'
+            TRANSCRIPTS_PINECONE_API_KEY: process.env.PINECONE_API_KEY ? 'SET' : 'NOT SET',
+            TRANSCRIPTS_PINECONE_INDEX_HOST: process.env.PINECONE_INDEX_HOST ? 'SET' : 'NOT SET',
+            FLINT_OS_PINECONE_API_KEY: process.env.FLINT_OS_PINECONE_API_KEY ? 'SET' : 'NOT SET',
+            FLINT_OS_PINECONE_INDEX_HOST: process.env.FLINT_OS_PINECONE_INDEX_HOST ? 'SET' : 'NOT SET',
+            ALLOWED_EMAIL_DOMAIN: process.env.ALLOWED_EMAIL_DOMAIN ? 'SET' : 'NOT SET',
+            MAKE_CHAT_WEBHOOK_URL: process.env.MAKE_CHAT_WEBHOOK_URL ? 'SET' : 'NOT SET'
         });
     }, 1000);
 });
