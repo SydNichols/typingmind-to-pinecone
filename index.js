@@ -31,6 +31,55 @@ function log(level, message, data = null) {
     }
 }
 
+function formatDate(dateString) {
+    if (!dateString) return "Unknown date";
+
+    try {
+        const date = new Date(dateString);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffHours = Math.floor(diffMs / (1000 * 60 *60));
+        const diffDays = Math.floor(diffHours / 24);
+
+        if (diffHours < 1) return "Just now";
+        if (diffHours < 24) return `${diffHours} hours ago`;
+        if (diffDays < 7) return `${diffDays} days ago`;
+        if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
+
+        return date.toLocaleDateString();
+    } catch (e) {
+        return dateString;
+    }
+}
+
+function deriveImportance(metadata) {
+    // Logic to determine importance based on your metadata
+    if (metadata.decisions_made && metadata.decisions_made.length > 0) return "high";
+    if (metadata.action_items && metadata.action_items.length > 0) return "medium";
+    if (metadata.roadblocks_issues && metadata.roadblocks_issues.length > 0) return "high";
+    if (metadata.tags && metadata.tags.includes("critical")) return "critical";
+    if (metadata.tags && metadata.tags.includes("urgent")) return "high";
+    return "low";
+}
+
+//Email validation
+const validateEmailDomain = (req, res, next) => {
+    const email = req.headers['x-user-email'];
+    const allowedDomain = process.env.ALLOWED_EMAIL_DOMAIN || '@yourcompany.com';
+    
+    if (!email || !email.endsWith(allowedDomain)) {
+        return res.status(401).json({ 
+            error: 'Unauthorized domain',
+            message: `Please use an email ending with ${allowedDomain}`,
+            received_email: email
+        });
+    }
+    
+    req.userEmail = email;
+    next();
+};
+
+
 // Environment variable debugging on startup
 log('info', 'Starting server initialization');
 log('info', 'Environment check', {
@@ -96,6 +145,17 @@ app.get('/health', (req, res) => {
                 value: pineconeIndexHost || null
             }
         },
+        // FLINT OS KB additions
+        newEndpoints: {
+            '/api/recent': 'GET - Recent knowledge entries',
+            '/api/search': 'POST - Search with filters',
+            '/api/chat': 'POST - Chat webhook proxy'
+        },
+        configuration: {
+            chat_webhook_configured: !!process.env.MAKE_CHAT_WEBHOOK_URL,
+            allowed_email_domain: process.env.ALLOWED_EMAIL_DOMAIN || 'not configured'
+        },
+        version: '1.1.0-week1',
         allEnvKeys: Object.keys(process.env).sort()
     };
     
@@ -414,6 +474,7 @@ app.post('/pinecone-query', async (req, res) => {
     }
 });
 
+
 // Test endpoint for debugging namespace issues
 app.get('/test-namespaces', async (req, res) => {
     const pineconeApiKey = process.env.PINECONE_API_KEY;
@@ -526,6 +587,329 @@ app.get('/pinecone-examples', (req, res) => {
             ]
         }
     });
+});
+
+//recent knowledge endpoint
+app.get('/api/recent', validateEmailDomain, async (req, res) => {
+    log('info', 'Recent knowledge request started');
+    
+    try {
+        const { limit = 20, days = 30 } = req.query;
+        
+        // Calculate date filter (days ago)
+        const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        const dateFilter = cutoffDate.toISOString().split('T')[0]; // YYYY-MM-DD format
+        
+        // Use your existing Pinecone configuration
+        let pineconeApiKey = process.env.PINECONE_API_KEY || 
+                           process.env.PINECONE_KEY || 
+                           process.env.API_KEY;
+        
+        let pineconeIndexHost = process.env.PINECONE_INDEX_HOST || 
+                              process.env.PINECONE_HOST || 
+                              process.env.INDEX_HOST;
+
+        if (pineconeIndexHost && pineconeIndexHost.startsWith('https://')) {
+            pineconeIndexHost = pineconeIndexHost.replace('https://', '');
+        }
+
+        if (!pineconeApiKey || !pineconeIndexHost) {
+            return res.status(500).json({ 
+                error: 'Pinecone configuration missing',
+                details: 'Please set PINECONE_API_KEY and PINECONE_INDEX_HOST'
+            });
+        }
+        
+        // Get recent entries using your existing Pinecone query structure
+        const requestPayload = {
+            query: {
+                inputs: { text: "recent updates knowledge information project meeting" },
+                top_k: parseInt(limit)
+            },
+            fields: ["title", "chunk_text", "date_ended", "people_involved", "tags", "source_type", "discussion", "action_items", "decisions_made", "label"],
+            filter: {
+                date_ended: { 
+                    $gte: dateFilter
+                }
+            }
+        };
+
+        const pineconeApiUrl = `https://${pineconeIndexHost}/records/namespaces/__default__/search`;
+        
+        log('info', 'Querying Pinecone for recent knowledge', {
+            url: pineconeApiUrl,
+            limit: limit,
+            days: days,
+            cutoff_date: dateFilter
+        });
+        
+        const response = await axios.post(pineconeApiUrl, requestPayload, {
+            headers: {
+                'Api-Key': pineconeApiKey,
+                'Content-Type': 'application/json',
+                'X-Pinecone-API-Version': 'unstable'
+            },
+            timeout: 30000
+        });
+
+        log('info', 'Pinecone response received', {
+            hits_count: response.data.result?.hits?.length || 0
+        });
+
+        // Transform Pinecone results to frontend format
+        const entries = (response.data.result?.hits || []).map((hit, index) => ({
+            id: hit.record.id || `entry-${index}`,
+            title: hit.record.metadata.title || hit.record.metadata.label || `Knowledge Entry ${index + 1}`,
+            description: hit.record.metadata.chunk_text ? 
+                hit.record.metadata.chunk_text.substring(0, 300) + "..." : 
+                "No description available",
+            author: Array.isArray(hit.record.metadata.people_involved) ? 
+                hit.record.metadata.people_involved[0] : 
+                hit.record.metadata.people_involved || "Unknown",
+            date: formatDate(hit.record.metadata.date_ended),
+            tags: Array.isArray(hit.record.metadata.tags) ? hit.record.metadata.tags : [],
+            sourceType: hit.record.metadata.source_type || "Document",
+            importance: deriveImportance(hit.record.metadata),
+            summary: hit.record.metadata.discussion || hit.record.metadata.chunk_text?.substring(0, 500),
+            actionItems: hit.record.metadata.action_items,
+            decisions: hit.record.metadata.decisions_made,
+            score: hit.score
+        }));
+
+        log('info', 'Recent knowledge query completed successfully', {
+            total_results: entries.length,
+            user_email: req.userEmail
+        });
+
+        res.json({ entries });
+        
+    } catch (error) {
+        log('error', 'Recent knowledge query failed', {
+            error: error.message,
+            stack: error.stack,
+            user_email: req.userEmail
+        });
+        
+        res.status(500).json({ 
+            error: 'Failed to fetch recent knowledge',
+            message: error.message,
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+});
+
+//Search endpoint with filter translation
+app.post('/api/search', validateEmailDomain, async (req, res) => {
+    log('info', 'Knowledge search request started', {
+        body: req.body,
+        user_email: req.userEmail
+    });
+    
+    try {
+        const { query, filters = {} } = req.body;
+        
+        if (!query) {
+            return res.status(400).json({
+                error: 'Query parameter is required',
+                message: 'Please provide a search query'
+            });
+        }
+        
+        // Use your existing Pinecone configuration
+        let pineconeApiKey = process.env.PINECONE_API_KEY || 
+                           process.env.PINECONE_KEY || 
+                           process.env.API_KEY;
+        
+        let pineconeIndexHost = process.env.PINECONE_INDEX_HOST || 
+                              process.env.PINECONE_HOST || 
+                              process.env.INDEX_HOST;
+
+        if (pineconeIndexHost && pineconeIndexHost.startsWith('https://')) {
+            pineconeIndexHost = pineconeIndexHost.replace('https://', '');
+        }
+
+        if (!pineconeApiKey || !pineconeIndexHost) {
+            return res.status(500).json({ 
+                error: 'Pinecone configuration missing',
+                details: 'Please set PINECONE_API_KEY and PINECONE_INDEX_HOST'
+            });
+        }
+        
+        // Build Pinecone filter from UI filters
+        const pineconeFilter = {};
+        
+        if (filters.source_type && Array.isArray(filters.source_type) && filters.source_type.length > 0) {
+            pineconeFilter.source_type = { $in: filters.source_type };
+        }
+        
+        if (filters.tags && Array.isArray(filters.tags) && filters.tags.length > 0) {
+            pineconeFilter.tags = { $in: filters.tags };
+        }
+        
+        if (filters.date_range && filters.date_range.from && filters.date_range.to) {
+            pineconeFilter.date_ended = {
+                $gte: filters.date_range.from,
+                $lte: filters.date_range.to
+            };
+        }
+        
+        if (filters.people_involved && Array.isArray(filters.people_involved) && filters.people_involved.length > 0) {
+            pineconeFilter.people_involved = { $in: filters.people_involved };
+        }
+
+        const requestPayload = {
+            query: {
+                inputs: { text: query },
+                top_k: 50
+            },
+            fields: ["title", "chunk_text", "date_ended", "people_involved", "tags", "source_type", "discussion", "action_items", "decisions_made", "label"],
+            filter: Object.keys(pineconeFilter).length > 0 ? pineconeFilter : undefined
+        };
+
+        const pineconeApiUrl = `https://${pineconeIndexHost}/records/namespaces/__default__/search`;
+        
+        log('info', 'Executing Pinecone search', {
+            query: query,
+            filters_applied: Object.keys(pineconeFilter),
+            payload: requestPayload
+        });
+        
+        const response = await axios.post(pineconeApiUrl, requestPayload, {
+            headers: {
+                'Api-Key': pineconeApiKey,
+                'Content-Type': 'application/json',
+                'X-Pinecone-API-Version': 'unstable'
+            },
+            timeout: 30000
+        });
+
+        // Transform results using the same format as /api/recent
+        const results = (response.data.result?.hits || []).map((hit, index) => ({
+            id: hit.record.id || `search-${index}`,
+            title: hit.record.metadata.title || hit.record.metadata.label || `Search Result ${index + 1}`,
+            description: hit.record.metadata.chunk_text ? 
+                hit.record.metadata.chunk_text.substring(0, 300) + "..." : 
+                "No description available",
+            author: Array.isArray(hit.record.metadata.people_involved) ? 
+                hit.record.metadata.people_involved[0] : 
+                hit.record.metadata.people_involved || "Unknown",
+            date: formatDate(hit.record.metadata.date_ended),
+            tags: Array.isArray(hit.record.metadata.tags) ? hit.record.metadata.tags : [],
+            sourceType: hit.record.metadata.source_type || "Document",
+            importance: deriveImportance(hit.record.metadata),
+            summary: hit.record.metadata.discussion || hit.record.metadata.chunk_text?.substring(0, 500),
+            score: hit.score
+        }));
+
+        log('info', 'Search query completed successfully', {
+            query: query,
+            total_results: results.length,
+            filters_applied: Object.keys(pineconeFilter),
+            user_email: req.userEmail
+        });
+
+        res.json({ results });
+        
+    } catch (error) {
+        log('error', 'Search query failed', {
+            error: error.message,
+            stack: error.stack,
+            query: req.body.query,
+            user_email: req.userEmail
+        });
+        
+        res.status(500).json({ 
+            error: 'Search failed',
+            message: error.message,
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+});
+
+//Chat webhook proxy
+app.post('/api/chat', validateEmailDomain, async (req, res) => {
+    log('info', 'Chat request started', {
+        message_preview: req.body.message?.substring(0, 100),
+        user_email: req.userEmail
+    });
+    
+    try {
+        const { message, conversation_history } = req.body;
+        
+        if (!message) {
+            return res.status(400).json({
+                error: 'Message parameter is required',
+                message: 'Please provide a message to send'
+            });
+        }
+        
+        // Forward to your Make.com webhook
+        const makeWebhookUrl = process.env.MAKE_CHAT_WEBHOOK_URL;
+        
+        if (!makeWebhookUrl) {
+            log('warn', 'Chat webhook not configured');
+            return res.status(500).json({
+                error: 'Chat webhook not configured',
+                message: 'Please set MAKE_CHAT_WEBHOOK_URL environment variable'
+            });
+        }
+
+        const response = await axios.post(makeWebhookUrl, {
+            message,
+            conversation_history: conversation_history || [],
+            timestamp: new Date().toISOString(),
+            source: "flint_os_dashboard",
+            user_email: req.userEmail
+        }, {
+            timeout: 30000,
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+
+        log('info', 'Chat response received successfully', {
+            user_email: req.userEmail,
+            message_length: message.length,
+            response_received: !!response.data
+        });
+
+        // Handle different response formats from Make.com
+        let chatResponse = '';
+        if (typeof response.data === 'string') {
+            chatResponse = response.data;
+        } else if (response.data.response) {
+            chatResponse = response.data.response;
+        } else if (response.data.message) {
+            chatResponse = response.data.message;
+        } else if (response.data.reply) {
+            chatResponse = response.data.reply;
+        } else {
+            chatResponse = JSON.stringify(response.data);
+        }
+
+        res.json({
+            response: chatResponse,
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        log('error', 'Chat request failed', {
+            error: error.message,
+            user_email: req.userEmail
+        });
+        
+        if (error.code === 'ECONNABORTED') {
+            return res.status(504).json({ 
+                error: 'Chat service timeout',
+                message: 'Please try again with a shorter message'
+            });
+        }
+        
+        res.status(500).json({ 
+            error: 'Chat service unavailable',
+            message: 'Please try again later'
+        });
+    }
 });
 
 // 404 handler
