@@ -626,7 +626,8 @@ app.use((req, res) => {
             'GET /api/recent',
             'POST /api/search',
             'POST /api/chat',
-            'POST /search (legacy)'
+            'POST /search (legacy)',
+            'GET /recent-notion'
         ]
     });
 });
