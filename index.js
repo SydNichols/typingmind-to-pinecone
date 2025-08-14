@@ -1,8 +1,6 @@
-// FLINT OS Knowledge Base Server - Complete Fixed Version
-// Version: 1.1.1-pinecone2025-fix
+// FLINT OS Knowledge Base Server - Fixed CommonJS Version
+// Version: 1.1.2-commonjs-fix
 // Date: August 13, 2025
-import { Pinecone } from '@pinecone-database/pinecone'
-
 
 const express = require('express');
 const axios = require('axios');
@@ -154,12 +152,13 @@ app.get('/health', (req, res) => {
             openai_configured: !!process.env.OPENAI_API_KEY,
             allowed_email_domain: process.env.ALLOWED_EMAIL_DOMAIN || '@flintbuilders.com'
         },
-        version: '1.1.1-pinecone2025-fix'
+        version: '1.1.2-commonjs-fix'
     };
     
     res.json(healthData);
 });
 
+// Test Notion connection endpoint
 app.get('/recent-notion', async(req, res) => {
     try {
         //test Notion connection
@@ -195,20 +194,19 @@ app.get('/recent-notion', async(req, res) => {
 
         res.json({
             status: 'success',
-            id: response.result.id
+            id: response.data.id || 'response received'
         });
 
     } catch (error) {
-        log('error', 'Namespace test failed', error);
+        log('error', 'Notion test failed', error.message);
         res.status(500).json({
-            error: 'Failed to test connection',
+            error: 'Failed to test Notion connection',
             message: error.message,
             status: error.response?.status,
             data: error.response?.data
         });
     }
-})
-
+});
 
 // Test namespaces endpoint (for debugging)
 app.get('/test-namespaces', async (req, res) => {
@@ -255,7 +253,7 @@ app.get('/test-namespaces', async (req, res) => {
         });
 
     } catch (error) {
-        log('error', 'Namespace test failed', error);
+        log('error', 'Namespace test failed', error.message);
         res.status(500).json({
             error: 'Failed to test Pinecone connection',
             message: error.message,
@@ -265,7 +263,7 @@ app.get('/test-namespaces', async (req, res) => {
     }
 });
 
-// Recent Knowledge Endpoint - FIXED VERSION
+// Recent Knowledge Endpoint
 app.get('/api/recent', validateEmailDomain, async (req, res) => {
     log('info', 'Recent knowledge request started');
     
@@ -336,7 +334,7 @@ app.get('/api/recent', validateEmailDomain, async (req, res) => {
         res.json({ entries });
         
     } catch (error) {
-        log('error', 'Recent knowledge query failed', error);
+        log('error', 'Recent knowledge query failed', error.message);
         
         // Enhanced error handling
         if (error.response?.status === 422) {
@@ -354,7 +352,7 @@ app.get('/api/recent', validateEmailDomain, async (req, res) => {
     }
 });
 
-// Search Endpoint - FIXED VERSION  
+// Search Endpoint
 app.post('/api/search', validateEmailDomain, async (req, res) => {
     log('info', 'Knowledge search request started', req.body);
     
@@ -445,7 +443,7 @@ app.post('/api/search', validateEmailDomain, async (req, res) => {
         res.json({ results });
         
     } catch (error) {
-        log('error', 'Search query failed', error);
+        log('error', 'Search query failed', error.message);
         
         if (error.response?.status === 422) {
             return res.status(422).json({ 
@@ -462,7 +460,7 @@ app.post('/api/search', validateEmailDomain, async (req, res) => {
     }
 });
 
-// Chat Webhook Proxy - UNCHANGED
+// Chat Webhook Proxy
 app.post('/api/chat', validateEmailDomain, async (req, res) => {
     log('info', 'Chat request started', req.body);
     
@@ -524,7 +522,7 @@ app.post('/api/chat', validateEmailDomain, async (req, res) => {
         });
         
     } catch (error) {
-        log('error', 'Chat request failed', error);
+        log('error', 'Chat request failed', error.message);
         
         if (error.code === 'ECONNABORTED') {
             return res.status(504).json({ 
@@ -540,7 +538,7 @@ app.post('/api/chat', validateEmailDomain, async (req, res) => {
     }
 });
 
-// Legacy transcript search endpoint (UNCHANGED - for backwards compatibility)
+// Legacy transcript search endpoint (for backwards compatibility)
 app.post('/search', async (req, res) => {
     log('info', 'Legacy transcript search request started', req.body);
     
@@ -593,7 +591,7 @@ app.post('/search', async (req, res) => {
         });
 
     } catch (error) {
-        log('error', 'Legacy transcript search failed', error);
+        log('error', 'Legacy transcript search failed', error.message);
         res.status(500).json({
             error: 'Search failed',
             message: error.message
@@ -635,7 +633,7 @@ app.use((req, res) => {
 // Start server
 app.listen(PORT, () => {
     log('info', `FLINT OS Knowledge Base Server started on port ${PORT}`, {
-        version: '1.1.1-pinecone2025-fix',
+        version: '1.1.2-commonjs-fix',
         environment: process.env.NODE_ENV || 'development',
         timestamp: new Date().toISOString()
     });

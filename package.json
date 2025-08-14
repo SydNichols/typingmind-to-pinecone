@@ -1,7 +1,6 @@
 {
   "name": "express-simple-starter",
   "private": true,
-  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
