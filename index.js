@@ -158,17 +158,88 @@ app.get('/health', (req, res) => {
     res.json(healthData);
 });
 
-// Test Notion connection endpoint
-app.get('/recent-notion', async(req, res) => {
-    try {
-        //test Notion connection
-        const notionToken = 'ntn_v76360814545OsVy0XnVxzXFBJ82Lye9J8R9q8q1rel85F';
+// Function to transform Notion API response to frontend format
+function transformNotionToKnowledgeEntries(notionResponse) {
+    if (!notionResponse.results || !Array.isArray(notionResponse.results)) {
+        return { entries: [] };
+    }
+
+    const entries = notionResponse.results.map(page => {
+        const props = page.properties;
         
-        if (!notionToken) {
+        // Extract text content from rich_text fields
+        const extractRichText = (richTextArray) => {
+            if (!richTextArray || !Array.isArray(richTextArray)) return "";
+            return richTextArray.map(item => item.plain_text || "").join("").trim();
+        };
+
+        // Extract title from title field
+        const extractTitle = (titleArray) => {
+            if (!titleArray || !Array.isArray(titleArray)) return "Untitled";
+            return titleArray.map(item => item.plain_text || "").join("").trim() || "Untitled";
+        };
+
+        // Extract select field value
+        const extractSelect = (selectField) => {
+            return selectField?.select?.name || null;
+        };
+
+        // Extract multi-select values
+        const extractMultiSelect = (multiSelectField) => {
+            if (!multiSelectField?.multi_select || !Array.isArray(multiSelectField.multi_select)) return [];
+            return multiSelectField.multi_select.map(item => item.name);
+        };
+
+        // Extract date
+        const extractDate = (dateField) => {
+            return dateField?.date?.start || null;
+        };
+
+        // Build the transformed entry
+        return {
+            id: page.id,
+            title: extractTitle(props.Title?.title),
+            description: extractRichText(props["What Was Discussed"]?.rich_text)?.substring(0, 300) + "..." || "No description available",
+            author: extractRichText(props["People Involved"]?.rich_text)?.split('\n')[0]?.replace(/^- /, '') || "Unknown",
+            date: formatDate(extractDate(props["Date Received"])),
+            tags: extractMultiSelect(props.Tags),
+            sourceType: extractSelect(props["Source Type"]) || "Document",
+            importance: (extractSelect(props.Importance) || "medium").toLowerCase(),
+            summary: extractRichText(props["What Was Discussed"]?.rich_text),
+            actionItems: extractRichText(props["Action Items/Next Steps"]?.rich_text)?.split('\n').filter(item => item.trim()),
+            decisions: extractRichText(props["Decision Made"]?.rich_text)?.split('\n').filter(item => item.trim()),
+            roadblocks: extractRichText(props["Roadblocks/Issues Raised"]?.rich_text)?.split('\n').filter(item => item.trim()),
+            openQuestions: extractRichText(props["Open Questions"]?.rich_text)?.split('\n').filter(item => item.trim()),
+            references: extractRichText(props.References?.rich_text)?.split('\n').filter(item => item.trim()),
+            milestones: extractRichText(props["Milestones and Status Updates"]?.rich_text)?.split('\n').filter(item => item.trim()),
+            type: extractSelect(props.Type),
+            phase: extractSelect(props.Phase),
+            freshnessScore: props["Freshness Score"]?.formula?.number || 0,
+            url: page.url,
+            lastEdited: page.last_edited_time,
+            createdTime: page.created_time
+        };
+    });
+
+    return { entries };
+}
+
+// Updated /api/recent-notion endpoint - simplified for most recent entries
+app.get('/api/recent-notion', validateEmailDomain, async (req, res) => {
+    log('info', 'Recent Notion knowledge request started');
+    
+    try {
+        const { limit = 20 } = req.query;
+        
+        const notionToken = process.env.NOTION_API_TOKEN;
+        const databaseId = process.env.NOTION_DATABASE_ID;
+        
+        if (!notionToken || !databaseId) {
             return res.status(500).json({
                 error: 'Notion configuration missing',
                 missing: {
                     token: !notionToken,
+                    databaseId: !databaseId
                 }
             });
         }
@@ -180,34 +251,191 @@ app.get('/recent-notion', async(req, res) => {
                     direction: "descending"
                 }
             ],
-            page_size: 10
+            page_size: parseInt(limit)
         };
 
-        const response = await axios.post(`https://api.notion.com/v1/databases/22d1c7255b2e80d1a2c3f7b6586e26a4/query`, notionPayload, {
-            headers: {
-                'Authorization': `Bearer ${notionToken}`,
-                'Content-Type': 'application/json',
-                'Notion-Version': '2022-06-28'
-            },
-            timeout: 30000
+        const response = await axios.post(
+            `https://api.notion.com/v1/databases/${databaseId}/query`, 
+            notionPayload, 
+            {
+                headers: {
+                    'Authorization': `Bearer ${notionToken}`,
+                    'Content-Type': 'application/json',
+                    'Notion-Version': '2022-06-28'
+                },
+                timeout: 30000
+            }
+        );
+
+        // Transform the Notion response to frontend format
+        const transformedData = transformNotionToKnowledgeEntries(response.data);
+
+        log('info', 'Recent Notion knowledge query completed', {
+            total_results: transformedData.entries.length,
+            user_email: req.userEmail
         });
 
-        res.json({
-            status: 'success',
-            id: response.results.id || 'response received'
-        });
+        res.json(transformedData);
 
     } catch (error) {
-        log('error', 'Notion test failed', error.message);
+        log('error', 'Recent Notion knowledge query failed', error.message);
         res.status(500).json({
-            error: 'Failed to test Notion connection',
+            error: 'Failed to fetch recent Notion knowledge',
             message: error.message,
-            status: error.response?.status,
-            data: error.response?.data
+            status: error.response?.status
         });
     }
 });
 
+// Alternative: Search Notion endpoint with filters
+app.post('/api/search-notion', validateEmailDomain, async (req, res) => {
+    log('info', 'Notion search request started', req.body);
+    
+    try {
+        const { query, filters = {} } = req.body;
+        
+        const notionToken = process.env.NOTION_API_TOKEN;
+        const databaseId = process.env.NOTION_DATABASE_ID;
+        
+        if (!notionToken || !databaseId) {
+            return res.status(500).json({
+                error: 'Notion configuration missing'
+            });
+        }
+
+        // Build Notion filter from UI filters
+        let notionFilter = undefined;
+        
+        if (query || Object.keys(filters).length > 0) {
+            const filterConditions = [];
+            
+            // Text search across multiple fields
+            if (query) {
+                filterConditions.push({
+                    or: [
+                        {
+                            property: "Title",
+                            title: {
+                                contains: query
+                            }
+                        },
+                        {
+                            property: "What Was Discussed",
+                            rich_text: {
+                                contains: query
+                            }
+                        },
+                        {
+                            property: "Decision Made",
+                            rich_text: {
+                                contains: query
+                            }
+                        }
+                    ]
+                });
+            }
+            
+            // Source type filter
+            if (filters.source_type?.length) {
+                filterConditions.push({
+                    property: "Source Type",
+                    select: {
+                        equals: filters.source_type[0] // Notion select only supports single value
+                    }
+                });
+            }
+            
+            // Tags filter
+            if (filters.tags?.length) {
+                filterConditions.push({
+                    property: "Tags",
+                    multi_select: {
+                        contains: filters.tags[0] // Can be expanded for multiple tag logic
+                    }
+                });
+            }
+            
+            // Date range filter
+            if (filters.date_range) {
+                filterConditions.push({
+                    property: "Date Received",
+                    date: {
+                        on_or_after: filters.date_range.from,
+                        on_or_before: filters.date_range.to
+                    }
+                });
+            }
+            
+            // Importance filter
+            if (filters.importance?.length) {
+                filterConditions.push({
+                    property: "Importance",
+                    select: {
+                        equals: filters.importance[0]
+                    }
+                });
+            }
+            
+            // Combine filters with AND logic
+            if (filterConditions.length === 1) {
+                notionFilter = filterConditions[0];
+            } else if (filterConditions.length > 1) {
+                notionFilter = {
+                    and: filterConditions
+                };
+            }
+        }
+
+        const notionPayload = {
+            sorts: [
+                {
+                    property: "Freshness Score",
+                    direction: "descending"
+                },
+                {
+                    property: "Date Received",
+                    direction: "descending"
+                }
+            ],
+            page_size: 50,
+            ...(notionFilter && { filter: notionFilter })
+        };
+
+        const response = await axios.post(
+            `https://api.notion.com/v1/databases/${databaseId}/query`, 
+            notionPayload, 
+            {
+                headers: {
+                    'Authorization': `Bearer ${notionToken}`,
+                    'Content-Type': 'application/json',
+                    'Notion-Version': '2022-06-28'
+                },
+                timeout: 30000
+            }
+        );
+
+        // Transform the Notion response
+        const transformedData = transformNotionToKnowledgeEntries(response.data);
+
+        log('info', 'Notion search completed', {
+            query: query,
+            total_results: transformedData.entries.length,
+            filters_applied: Object.keys(filters),
+            user_email: req.userEmail
+        });
+
+        res.json({ results: transformedData.entries });
+
+    } catch (error) {
+        log('error', 'Notion search failed', error.message);
+        res.status(500).json({
+            error: 'Notion search failed',
+            message: error.message
+        });
+    }
+});
+
+module.exports = { transformNotionToKnowledgeEntries };
 // Test namespaces endpoint (for debugging)
 app.get('/test-namespaces', async (req, res) => {
     try {
