@@ -194,7 +194,7 @@ app.get('/recent-notion', async(req, res) => {
 
         res.json({
             status: 'success',
-            id: response.data.id || 'response received'
+            id: response.results.id || 'response received'
         });
 
     } catch (error) {
