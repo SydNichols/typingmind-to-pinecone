@@ -231,8 +231,8 @@ app.get('/api/recent-notion', validateEmailDomain, async (req, res) => {
     try {
         const { limit = 20 } = req.query;
         
-        const notionToken = process.env.NOTION_API_TOKEN;
-        const databaseId = process.env.NOTION_DATABASE_ID;
+        const notionToken = 'ntn_v76360814545OsVy0XnVxzXFBJ82Lye9J8R9q8q1rel85F';
+        const databaseId = '22d1c725-5b2e-80d1-a2c3-f7b6586e26a4';
         
         if (!notionToken || !databaseId) {
             return res.status(500).json({
